@@ -6,7 +6,7 @@ from slowapi.util import get_remote_address
 from models.schemas import TranslationResponse
 from services.scraper_service import fetch_word_details
 from services.cache_base import BaseCache
-from core.config import app_logger
+from core.config import app_logger, api_settings
 from core.security import verify_api_key
 from core.dependencies import get_cache, get_scraper
 
@@ -21,7 +21,7 @@ translation_router = APIRouter(dependencies=[Depends(verify_api_key)])
     summary="Translate a word",
     description="Fetches translation details for the given English/Turkish word. Results are cached with TTL.",
 )
-@limiter.limit("30/minute")
+@limiter.limit(api_settings.rate_limit)
 async def get_translation(
     request: Request,
     word: str,

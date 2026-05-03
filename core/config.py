@@ -21,6 +21,9 @@ class AppSettings(BaseSettings):
     cache_ttl_seconds: int = 3600
     redis_url: str | None = None
 
+    # --- Rate Limiting ---
+    rate_limit: str = "30/minute"
+
     # --- Scraper ---
     target_base_url: str = "https://tureng.com/en/turkish-english"
     scraper_timeout: int = 10

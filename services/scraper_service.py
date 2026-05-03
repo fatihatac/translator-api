@@ -1,5 +1,7 @@
+import asyncio
 from bs4 import BeautifulSoup
 from curl_cffi.requests import AsyncSession
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from models.schemas import WordDetailData, AudioLinks, TranslationItem
 from core.config import api_settings, app_logger
@@ -12,13 +14,23 @@ from core.exceptions import (
 )
 
 
+def _is_transient_error(exception: BaseException) -> bool:
+    """Determine if an exception is transient and should be retried."""
+    if isinstance(exception, (WordNotFoundException, TargetSiteStructureChanged)):
+        return False
+    return True
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    retry=retry_if_exception_type(Exception) & retry_if_exception_type(BaseTranslatorException),
+    reraise=True
+)
 async def fetch_word_details(target_word: str, scraper: AsyncSession) -> WordDetailData:
     """
     Scrapes word translation details from the target website asynchronously.
-
-    Args:
-        target_word: The word to look up.
-        scraper: A shared curl_cffi AsyncSession instance.
+    Uses tenacity for exponential backoff retries on transient errors.
     """
     target_url = f"{api_settings.target_base_url}/{target_word}"
 
@@ -124,6 +136,9 @@ async def fetch_word_details(target_word: str, scraper: AsyncSession) -> WordDet
             results=[TranslationItem(**item) for item in extracted_translations],
         )
 
+    except (WordNotFoundException, TargetSiteStructureChanged):
+        # Do not retry for non-transient errors
+        raise
     except BaseTranslatorException:
         raise
     except TimeoutError:
