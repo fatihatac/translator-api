@@ -79,4 +79,5 @@ app.include_router(translation_router, prefix="/api/translate", tags=["Translati
 
 if __name__ == "__main__":
     print(f"🚀 {api_settings.project_title} starting on http://127.0.0.1:8000")
+    print(f"📜 For docs go to http://127.0.0.1:8000/api/docs")
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
