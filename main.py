@@ -30,7 +30,20 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # ty
 
 
 
-# --- Global Exception Handler ---
+# --- Global Exception Handlers ---
+from core.exceptions import BaseTranslatorException
+
+@app.exception_handler(BaseTranslatorException)
+async def custom_translator_exception_handler(request: Request, exc: BaseTranslatorException):
+    app_logger.error(
+        "Translator error",
+        extra={"path": str(request.url), "error": str(exc.detail), "status_code": exc.status_code},
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+    )
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     app_logger.error(

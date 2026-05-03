@@ -1,25 +1,34 @@
-# Use the specific Python 3.14.0 runtime as a parent image (slim version)
-FROM python:3.14.0-slim
+# --- Builder Stage ---
+FROM python:3.11-slim as builder
 
-# Set environment variables to optimize Python execution in Docker
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Set the working directory in the container
 WORKDIR /app
 
-# Copy only the requirements file first to leverage Docker cache
+RUN apt-get update && apt-get install -y --no-install-recommends gcc python3-dev && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
+RUN pip wheel --no-cache-dir --no-deps --wheel-dir /app/wheels -r requirements.txt
 
-# Install dependencies securely without keeping cache to save space
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
+# --- Final Stage ---
+FROM python:3.11-slim
 
-# Copy the entire project directory into the container
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+COPY --from=builder /app/wheels /wheels
+COPY --from=builder /app/requirements.txt .
+
+RUN pip install --no-cache /wheels/*
+
 COPY . .
 
-# Expose the port the app runs on
+# curl is needed for healthcheck in docker-compose, but we can also use python to check
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+
 EXPOSE 8000
 
-# Command to run the application using Uvicorn
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

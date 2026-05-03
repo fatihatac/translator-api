@@ -1,12 +1,32 @@
+from typing import AsyncGenerator
 from fastapi import Request
-from services.cache_service import TranslationCache
+from curl_cffi.requests import AsyncSession
+from services.cache_base import BaseCache
+
+# Global instances managed by lifespan
+_cache_instance: BaseCache | None = None
+_scraper_instance: AsyncSession | None = None
 
 
-def get_cache(request: Request) -> TranslationCache:
-    """Provides the shared TranslationCache instance from app state."""
-    return request.app.state.cache
+def set_cache_instance(cache: BaseCache):
+    global _cache_instance
+    _cache_instance = cache
 
 
-def get_scraper(request: Request):
-    """Provides the shared cloudscraper instance from app state."""
-    return request.app.state.scraper
+def set_scraper_instance(scraper: AsyncSession):
+    global _scraper_instance
+    _scraper_instance = scraper
+
+
+async def get_cache() -> AsyncGenerator[BaseCache, None]:
+    """Provides the shared cache instance."""
+    if _cache_instance is None:
+        raise RuntimeError("Cache instance is not initialized")
+    yield _cache_instance
+
+
+async def get_scraper() -> AsyncGenerator[AsyncSession, None]:
+    """Provides the shared scraper session."""
+    if _scraper_instance is None:
+        raise RuntimeError("Scraper instance is not initialized")
+    yield _scraper_instance

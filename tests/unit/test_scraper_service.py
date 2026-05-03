@@ -1,6 +1,11 @@
 import pytest
-from unittest.mock import MagicMock, patch
-from fastapi import HTTPException
+from unittest.mock import AsyncMock, patch
+from core.exceptions import (
+    WordNotFoundException,
+    ProxyBlockedException,
+    BaseTranslatorException,
+    TargetSiteStructureChanged
+)
 from services.scraper_service import fetch_word_details
 
 
@@ -29,25 +34,29 @@ MOCK_HTML_FOUND = """
 </html>
 """
 
-MOCK_HTML_NOT_FOUND = """
-<html><body><p>No results.</p></body></html>
+MOCK_HTML_NOT_FOUND_H1 = """
+<html><body><h1>Term not found</h1></body></html>
+"""
+
+MOCK_HTML_NO_TABLE = """
+<html><body><h1>Some other error</h1></body></html>
 """
 
 
 def _mock_scraper(html: str, status_code: int = 200):
-    response = MagicMock()
+    response = AsyncMock()
     response.status_code = status_code
     response.text = html
-    response.raise_for_status = MagicMock()
-    scraper = MagicMock()
+    scraper = AsyncMock()
     scraper.get.return_value = response
     return scraper
 
 
+@pytest.mark.asyncio
 class TestFetchWordDetails:
-    def test_successful_scrape_returns_word_data(self):
+    async def test_successful_scrape_returns_word_data(self):
         scraper = _mock_scraper(MOCK_HTML_FOUND)
-        result = fetch_word_details("hello", scraper)
+        result = await fetch_word_details("hello", scraper)
 
         assert result.word == "hello"
         assert len(result.results) == 2
@@ -55,34 +64,42 @@ class TestFetchWordDetails:
         assert result.results[0].type == "interj."
         assert result.results[1].meaning == "selam"
 
-    def test_audio_links_extracted_correctly(self):
+    async def test_audio_links_extracted_correctly(self):
         scraper = _mock_scraper(MOCK_HTML_FOUND)
-        result = fetch_word_details("hello", scraper)
+        result = await fetch_word_details("hello", scraper)
 
-        assert result.audio.us == "https://cdn.tureng.com/us/hello.mp3"
-        assert result.audio.uk == "https://cdn.tureng.com/uk/hello.mp3"
+        assert str(result.audio.us) == "https://cdn.tureng.com/us/hello.mp3"
+        assert str(result.audio.uk) == "https://cdn.tureng.com/uk/hello.mp3"
         assert result.audio.aus is None
 
-    def test_word_not_found_raises_404(self):
-        scraper = _mock_scraper(MOCK_HTML_NOT_FOUND)
-        with pytest.raises(HTTPException) as exc_info:
-            fetch_word_details("xyzunknownword", scraper)
-        assert exc_info.value.status_code == 404
+    async def test_word_not_found_raises_404_status(self):
+        scraper = _mock_scraper("", status_code=404)
+        with pytest.raises(WordNotFoundException):
+            await fetch_word_details("xyzunknownword", scraper)
 
-    def test_403_response_raises_503(self):
+    async def test_word_not_found_h1_msg(self):
+        scraper = _mock_scraper(MOCK_HTML_NOT_FOUND_H1)
+        with pytest.raises(WordNotFoundException):
+            await fetch_word_details("xyzunknownword", scraper)
+
+    async def test_table_missing_raises_structure_changed(self):
+        scraper = _mock_scraper(MOCK_HTML_NO_TABLE)
+        with pytest.raises(TargetSiteStructureChanged):
+            await fetch_word_details("hello", scraper)
+
+    async def test_403_response_raises_proxy_blocked(self):
         scraper = _mock_scraper("", status_code=403)
-        with pytest.raises(HTTPException) as exc_info:
-            fetch_word_details("hello", scraper)
-        assert exc_info.value.status_code == 503
+        with pytest.raises(ProxyBlockedException):
+            await fetch_word_details("hello", scraper)
 
-    def test_network_error_raises_500(self):
-        scraper = MagicMock()
-        scraper.get.side_effect = ConnectionError("Network unreachable")
-        with pytest.raises(HTTPException) as exc_info:
-            fetch_word_details("hello", scraper)
+    async def test_network_error_raises_500(self):
+        scraper = AsyncMock()
+        scraper.get.side_effect = Exception("Network unreachable")
+        with pytest.raises(BaseTranslatorException) as exc_info:
+            await fetch_word_details("hello", scraper)
         assert exc_info.value.status_code == 500
 
-    def test_duplicate_translations_are_filtered(self):
+    async def test_duplicate_translations_are_filtered(self):
         """Identical term+meaning pairs should only appear once."""
         html_with_dupes = """
         <html><body>
@@ -93,5 +110,5 @@ class TestFetchWordDetails:
         </body></html>
         """
         scraper = _mock_scraper(html_with_dupes)
-        result = fetch_word_details("run", scraper)
+        result = await fetch_word_details("run", scraper)
         assert len(result.results) == 1

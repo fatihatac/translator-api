@@ -19,6 +19,7 @@ class AppSettings(BaseSettings):
     # --- Cache ---
     max_cache_size: int = 1000
     cache_ttl_seconds: int = 3600
+    redis_url: str | None = None
 
     # --- Scraper ---
     target_base_url: str = "https://tureng.com/en/turkish-english"

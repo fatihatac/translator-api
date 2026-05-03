@@ -1,38 +1,41 @@
-import cloudscraper
 from bs4 import BeautifulSoup
-from fastapi import HTTPException, status
+from curl_cffi.requests import AsyncSession
 
 from models.schemas import WordDetailData, AudioLinks, TranslationItem
 from core.config import api_settings, app_logger
+from core.exceptions import (
+    ProxyBlockedException,
+    TargetSiteStructureChanged,
+    WordNotFoundException,
+    ScrapingTimeoutException,
+    BaseTranslatorException
+)
 
 
-def fetch_word_details(target_word: str, scraper=None) -> WordDetailData:
+async def fetch_word_details(target_word: str, scraper: AsyncSession) -> WordDetailData:
     """
-    Scrapes word translation details from the target website.
+    Scrapes word translation details from the target website asynchronously.
 
     Args:
         target_word: The word to look up.
-        scraper: A shared cloudscraper instance injected via app.state.
-                 Falls back to creating a new one if not provided (e.g. in tests).
+        scraper: A shared curl_cffi AsyncSession instance.
     """
-    if scraper is None:
-        scraper = cloudscraper.create_scraper(
-            browser={"browser": "chrome", "platform": "windows", "mobile": False}
-        )
-
     target_url = f"{api_settings.target_base_url}/{target_word}"
 
     try:
-        response = scraper.get(target_url, timeout=api_settings.scraper_timeout)
+        response = await scraper.get(target_url, timeout=api_settings.scraper_timeout)
 
-        if response.status_code == 403:
-            app_logger.warning("Scraper blocked by target", extra={"word": target_word})
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Scraping service is temporarily blocked by the target server.",
-            )
+        if response.status_code == 403 or response.status_code == 503:
+            app_logger.warning("Scraper blocked by target", extra={"word": target_word, "status": response.status_code})
+            raise ProxyBlockedException()
 
-        response.raise_for_status()
+        if response.status_code == 404:
+            raise WordNotFoundException(target_word)
+
+        if response.status_code != 200:
+            raise BaseTranslatorException(status_code=response.status_code, detail=f"Unexpected status code: {response.status_code}")
+
+        # HTML parsing is fast enough to do synchronously in most cases
         html_soup = BeautifulSoup(response.text, "html.parser")
 
         # 1. Extract Audio Links
@@ -55,10 +58,11 @@ def fetch_word_details(target_word: str, scraper=None) -> WordDetailData:
         results_table = html_soup.find("table", {"id": "englishResultsTable"})
 
         if not results_table:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Word '{target_word}' not found or invalid.",
-            )
+            # Table might be missing if word not found or layout changed
+            not_found_msg = html_soup.find("h1")
+            if not_found_msg and "Term not found" in not_found_msg.text:
+                raise WordNotFoundException(target_word)
+            raise TargetSiteStructureChanged()
 
         extracted_translations = []
         table_rows = results_table.find_all("tr")
@@ -111,21 +115,27 @@ def fetch_word_details(target_word: str, scraper=None) -> WordDetailData:
                     }
                 )
 
+        if not extracted_translations:
+             raise WordNotFoundException(target_word)
+
         return WordDetailData(
             word=target_word,
             audio=AudioLinks(**audio_links_dict),
             results=[TranslationItem(**item) for item in extracted_translations],
         )
 
-    except HTTPException:
+    except BaseTranslatorException:
         raise
+    except TimeoutError:
+        app_logger.warning("Scraping timeout", extra={"word": target_word})
+        raise ScrapingTimeoutException()
     except Exception as runtime_error:
         app_logger.error(
             "Scraper error",
             extra={"word": target_word, "error": str(runtime_error)},
             exc_info=True,
         )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An internal error occurred while processing the word.",
+        raise BaseTranslatorException(
+            status_code=500,
+            detail="An internal error occurred while processing the word."
         )
